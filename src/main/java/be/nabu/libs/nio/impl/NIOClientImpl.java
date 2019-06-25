@@ -112,6 +112,8 @@ public class NIOClientImpl extends NIOServerImpl implements NIOClient {
 
 	@Override
 	public void start() throws IOException {
+		startPools();
+		
 		selector = Selector.open();
 
 		started = true;
@@ -204,27 +206,36 @@ public class NIOClientImpl extends NIOServerImpl implements NIOClient {
 		        			logger.warn("No channel, cancelling key for: {}", clientChannel.socket());
 		        			close(key);
 		        		}
-		        		else if (!key.isValid() || !clientChannel.isConnected() || !clientChannel.isOpen() || clientChannel.socket().isInputShutdown()) {
-		        			logger.warn("Disconnected, cancelling key for: {}", clientChannel.socket());
-		    				Pipeline pipeline = channels.get(clientChannel);
-		    				if (pipeline != null) {
-								pipeline.close();
-		    				}
-		    				else {
-		    					close(key);
-		    				}
-		    				PipelineFuture remove = futures.remove(clientChannel);
-		    				if (remove != null) {
-		    					remove.cancel(true);
-		    				}
-		        		}
 		        		else {
 		        			Pipeline pipeline = channels.get(clientChannel);
+		        			// if there is still something to read, read it
+		        			// even if it's closed
+		        			boolean read = false;
 		    				if (key.isReadable() && pipeline != null) {
 		    					logger.trace("Scheduling pipeline, new data for: {}", clientChannel.socket());
 		    					pipeline.read();
+		    					read = true;
 		    				}
-		        			if (key.isWritable() && pipeline != null) {
+		    				if (!key.isValid() || !clientChannel.isConnected() || !clientChannel.isOpen() || clientChannel.socket().isInputShutdown()) {
+		    					// if we read stuff, the reader will close the channel when everything is done
+		    					if (!read) {
+			    					logger.warn("Disconnected, cancelling key for: {}", clientChannel.socket());
+			    					if (pipeline != null) {
+			    						pipeline.getServer().getDispatcher().fire(new ConnectionEventImpl(pipeline.getServer(), pipeline, ConnectionEvent.ConnectionState.EMPTY), this);
+			    						pipeline.close();
+			    					}
+			    					else {
+			    						close(key);
+			    					}
+		    					}
+		    					// we do want to remove the future however
+		    					PipelineFuture remove = futures.remove(clientChannel);
+		    					if (remove != null) {
+		    						remove.cancel(true);
+		    					}
+		    				}
+		    				// only write if the channel is still open
+		    				else if (key.isWritable() && pipeline != null) {
 		        				logger.trace("Scheduling write processor, write buffer available for: {}", clientChannel.socket());
 		    					pipeline.write();
 		        			}
@@ -250,10 +261,18 @@ public class NIOClientImpl extends NIOServerImpl implements NIOClient {
 	        	if (!started) {
 	        		break;
 	        	}
+	        	else if (Thread.interrupted()) {
+					this.stop();
+				}
 			}
 		}
 		finally {
-			selector.close();
+			try {
+				selector.close();
+			}
+			finally {
+				shutdownPools();
+			}
 		}
 	}
 
