@@ -16,6 +16,7 @@ import java.util.Map;
 import java.util.Set;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.ExecutionException;
+import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Future;
 import java.util.concurrent.ThreadFactory;
 import java.util.concurrent.TimeUnit;
@@ -40,6 +41,10 @@ public class NIOClientImpl extends NIOServerImpl implements NIOClient {
 	private List<Runnable> runnables = Collections.synchronizedList(new ArrayList<Runnable>());
 	private Map<SocketChannel, PipelineFuture> futures = Collections.synchronizedMap(new HashMap<SocketChannel, PipelineFuture>());
 	private List<SocketChannel> finalizers = Collections.synchronizedList(new ArrayList<SocketChannel>());
+	
+	public NIOClientImpl(SSLContext sslContext, ExecutorService ioExecutors, ExecutorService processExecutors, PipelineFactory pipelineFactory, EventDispatcher dispatcher) {
+		super(sslContext, null, 0, ioExecutors, processExecutors, pipelineFactory, dispatcher);
+	}
 	
 	public NIOClientImpl(SSLContext sslContext, int ioPoolSize, int processPoolSize, PipelineFactory pipelineFactory, EventDispatcher dispatcher, ThreadFactory threadFactory) {
 		super(sslContext, null, 0, ioPoolSize, processPoolSize, pipelineFactory, dispatcher, threadFactory);
@@ -132,7 +137,7 @@ public class NIOClientImpl extends NIOServerImpl implements NIOClient {
 						logger.error("Could not run outstanding runnable", e);
 					}
 				}
-				if (selected == 0) {
+				if (selected == 0 && started) {
 					continue;
 				}
 				Set<SelectionKey> selectedKeys = selector.selectedKeys();
@@ -147,59 +152,64 @@ public class NIOClientImpl extends NIOServerImpl implements NIOClient {
 			        			submitIOTask(new Runnable() {
 			        				public void run() {
 			        					PipelineFuture pipelineFuture = futures.get(clientChannel);
-			        					if (!started || pipelineFuture == null) {
-			        						logger.warn("Unknown channel: " + clientChannel);
-			        						try {
-			        							clientChannel.close();
-			        						}
-			        						catch (Exception e) {
-			        							logger.warn("Could not close unknown channel", e);
-			        						}
-			        						finally {
-			        							key.cancel();
-			        						}
-			        					}
-			        					else {
-				        					try {
-				        						if (pipelineFuture.isCancelled()) {
-					        						// cancel again to make sure we close any remaining pipelines
-					        						pipelineFuture.cancel(true);
-					        					}
-				        						else {
-					        						logger.debug("Finalizing accepted connection to: {}", clientChannel.getRemoteAddress());
-							        				// finalize the connection
-							            			while (started && key.isValid() && clientChannel.isConnectionPending() && clientChannel.isOpen()) {
-							            				clientChannel.finishConnect();
-							            			}
-						            				logger.debug("Realizing {}", pipelineFuture);
-						            				pipelineFuture.unstage();
-					            					getDispatcher().fire(new ConnectionEventImpl(NIOClientImpl.this, pipelineFuture.get(), ConnectionEvent.ConnectionState.CONNECTED), NIOClientImpl.this);
-				        						}
-				        					}
-				        					catch (Exception e) {
-				        						logger.warn("Could not finalize connection: " + clientChannel, e);
-				        						Pipeline staged = pipelineFuture.getStaged();
+			        					try  {
+				        					if (!started || pipelineFuture == null) {
+				        						logger.warn("Unknown channel: " + clientChannel);
 				        						try {
-				        							if (staged == null) {
-				        								clientChannel.close();
-				        							}
-				        							else {
-				        								staged.close();
-				        							}
-												}
-				        						catch (IOException e1) {
-				        							// ignore
-												}
+				        							clientChannel.close();
+				        						}
+				        						catch (Exception e) {
+				        							logger.warn("Could not close unknown channel", e);
+				        						}
 				        						finally {
-				        							pipelineFuture.fail(e);
 				        							key.cancel();
-				        							selector.wakeup();
 				        						}
 				        					}
-				        					finally {
-				        						futures.remove(clientChannel);
-				        						finalizers.remove(clientChannel);
+				        					else {
+					        					try {
+					        						if (pipelineFuture.isCancelled()) {
+						        						// cancel again to make sure we close any remaining pipelines
+						        						pipelineFuture.cancel(true);
+						        					}
+					        						else {
+						        						logger.debug("Finalizing accepted connection to: {}", clientChannel.getRemoteAddress());
+								        				// finalize the connection
+								            			while (started && key.isValid() && clientChannel.isConnectionPending() && clientChannel.isOpen()) {
+								            				clientChannel.finishConnect();
+								            			}
+							            				logger.debug("Realizing {}", pipelineFuture);
+							            				pipelineFuture.unstage();
+						            					getDispatcher().fire(new ConnectionEventImpl(NIOClientImpl.this, pipelineFuture.get(), ConnectionEvent.ConnectionState.CONNECTED), NIOClientImpl.this);
+					        						}
+					        					}
+					        					catch (Exception e) {
+					        						logger.warn("Could not finalize connection: " + clientChannel, e);
+					        						Pipeline staged = pipelineFuture.getStaged();
+					        						try {
+					        							if (staged == null) {
+					        								clientChannel.close();
+					        							}
+					        							else {
+					        								staged.close();
+					        							}
+													}
+					        						catch (IOException e1) {
+					        							// ignore
+													}
+					        						finally {
+					        							pipelineFuture.fail(e);
+					        							key.cancel();
+					        							selector.wakeup();
+					        						}
+					        					}
 				        					}
+			        					}
+			        					finally {
+			        						futures.remove(clientChannel);
+			        						// if we remove the finalizer here, we enter this state multiple times but the future is already removed
+			        						// so the second time, the future will not be there and we close the connection
+			        						// this is a very odd edge case that happens on average twice per 500 requests or so, not exactly clear why we end up here multiple times
+//			        						finalizers.remove(clientChannel);
 			        					}
 			        				}
 			        			});
@@ -277,6 +287,11 @@ public class NIOClientImpl extends NIOServerImpl implements NIOClient {
 				shutdownPools();
 			}
 		}
+	}
+	
+	public void close(SelectionKey key) {
+		finalizers.remove(key.channel());
+		super.close(key);
 	}
 
 	public void pruneConnections() {
