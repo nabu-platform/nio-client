@@ -126,7 +126,7 @@ public class NIOClientImpl extends NIOServerImpl implements NIOClient {
 		try {
 			// the loop should execute one last time after started has been turned off to process any remaining closings/cancellations
 			while (true) {
-				int selected = selector.select(10000);
+				int selected = runnables.isEmpty() ? selector.select() : 0;
 				List<Runnable> runnables = new ArrayList<Runnable>(this.runnables);
 				this.runnables.removeAll(runnables);
 				for (Runnable callable : runnables) {
