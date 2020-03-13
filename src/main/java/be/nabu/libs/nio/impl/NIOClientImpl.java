@@ -41,6 +41,9 @@ public class NIOClientImpl extends NIOServerImpl implements NIOClient {
 	private List<Runnable> runnables = Collections.synchronizedList(new ArrayList<Runnable>());
 	private Map<SocketChannel, PipelineFuture> futures = Collections.synchronizedMap(new HashMap<SocketChannel, PipelineFuture>());
 	private List<SocketChannel> finalizers = Collections.synchronizedList(new ArrayList<SocketChannel>());
+	// the handshake timeout is for the actual shaking of the hands, this timeout is how long we wait for that AND an available resource to actually carry out the shaking
+	// if for example no IO thread is available for 15s, we would prematurely stop here
+	private long handshakeTimeout = Long.parseLong(System.getProperty("ssl.handshake.timeout", "30000")) * 2;
 	
 	public NIOClientImpl(SSLContext sslContext, ExecutorService ioExecutors, ExecutorService processExecutors, PipelineFactory pipelineFactory, EventDispatcher dispatcher) {
 		super(sslContext, null, 0, ioExecutors, processExecutors, pipelineFactory, dispatcher);
@@ -405,7 +408,7 @@ public class NIOClientImpl extends NIOServerImpl implements NIOClient {
 			try {
 				if (((MessagePipelineImpl<?, ?>) stage).isUseSsl()) {
 					Future<?> handshake = ((MessagePipelineImpl<?, ?>) stage).startHandshake();
-					handshake.get(30, TimeUnit.SECONDS);
+					handshake.get(handshakeTimeout, TimeUnit.MILLISECONDS);
 				}
 				this.response = this.stage;
 			}
