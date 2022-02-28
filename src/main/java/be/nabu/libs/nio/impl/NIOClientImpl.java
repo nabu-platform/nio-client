@@ -67,7 +67,7 @@ public class NIOClientImpl extends NIOServerImpl implements NIOClient {
 			@Override
 			public void run() {
 				try {
-					if (!future.isCancelled()) {
+					if (!future.isCancelled() && started) {
 						logger.debug("Connecting to {}:{}", host, port);
 						SocketChannel channel = getConnector().connect(NIOClientImpl.this, host, port);
 						try {
