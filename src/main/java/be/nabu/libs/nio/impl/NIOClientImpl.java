@@ -175,7 +175,7 @@ public class NIOClientImpl extends NIOServerImpl implements NIOClient {
 						        						pipelineFuture.cancel(true);
 						        					}
 					        						else {
-						        						logger.debug("Finalizing accepted connection to: {}", clientChannel.getRemoteAddress());
+						        						logger.debug("Finalizing accepted connection " + clientChannel);
 								        				// finalize the connection
 								            			while (started && key.isValid() && clientChannel.isConnectionPending() && clientChannel.isOpen()) {
 								            				clientChannel.finishConnect();
@@ -186,8 +186,8 @@ public class NIOClientImpl extends NIOServerImpl implements NIOClient {
 					        						}
 					        					}
 					        					catch (Exception e) {
-					        						logger.warn("Could not finalize connection: " + clientChannel, e);
 					        						Pipeline staged = pipelineFuture.getStaged();
+					        						logger.warn("Could not finalize connection: " + clientChannel + ", pipeline: " + staged, e);
 					        						try {
 					        							if (staged == null) {
 					        								clientChannel.close();
